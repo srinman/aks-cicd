@@ -1,0 +1,10 @@
+# Production-specific patches
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd-managed
+  labels:
+    environment: prod
+    security-level: high
+  annotations:
+    security.azure.com/pod-security-standards: restricted

@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hub-identity-config
+  namespace: argocd-managed
+data:
+  clientId: "604074ac-5cd5-4be3-94a7-3a95bfaa0d60"

@@ -1,0 +1,42 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: spoke-bootstrap-prod
+
+namespace: argocd-managed
+
+resources:
+  - ../../base
+  - hub-identity-configmap.yaml
+
+commonLabels:
+  environment: prod
+  cluster-type: spoke
+
+patches:
+- target:
+    kind: ServiceAccount
+    name: argocd-manager
+  patch: |-
+    - op: replace
+      path: /metadata/annotations/azure.workload.identity~1client-id
+      value: "604074ac-5cd5-4be3-94a7-3a95bfaa0d60"
+- target:
+    kind: ClusterRoleBinding
+    name: argocd-manager
+  patch: |-
+    - op: replace
+      path: /subjects/1/name
+      value: "604074ac-5cd5-4be3-94a7-3a95bfaa0d60"
+- target:
+    kind: Namespace
+    name: argocd-managed
+  patch: |-
+    - op: add
+      path: /metadata/labels/environment
+      value: prod
+
+# Production-specific configurations
+patchesStrategicMerge:
+- prod-patches.yaml
