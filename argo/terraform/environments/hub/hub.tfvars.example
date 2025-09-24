@@ -1,0 +1,63 @@
+# Hub Environment Configuration
+# Copy this file to hub.tfvars and update the values
+
+# Organization Configuration
+organization_prefix = "myorg"
+location           = "East US"
+kubernetes_version = "1.28.3"
+
+# System Node Pool
+system_node_count     = 2
+system_node_min_count = 1
+system_node_max_count = 5
+system_node_vm_size   = "Standard_D2s_v3"
+
+# ArgoCD Node Pool
+argocd_node_count     = 2
+argocd_node_min_count = 1
+argocd_node_max_count = 4
+argocd_node_vm_size   = "Standard_D4s_v3"
+
+# Network Configuration
+dns_service_ip = "10.0.0.10"
+service_cidr   = "10.0.0.0/16"
+
+# Azure AD Configuration
+# Add your Azure AD group object IDs for initial admin access
+admin_group_object_ids = [
+  # "00000000-0000-0000-0000-000000000000"  # Replace with actual group ID
+]
+
+# RBAC Configuration
+create_ad_groups          = true
+grant_subscription_reader = false
+create_key_vault         = true
+
+# Spoke Environments (update after spoke deployment)
+spoke_environments = {
+  dev = {
+    name        = "development"
+    description = "Development environment"
+  }
+  staging = {
+    name        = "staging"  
+    description = "Staging environment"
+  }
+  prod = {
+    name        = "production"
+    description = "Production environment"
+  }
+}
+
+# These will be populated after spoke cluster deployment
+spoke_resource_group_ids = []
+spoke_cluster_ids       = {}
+
+# Tags
+common_tags = {
+  Environment = "hub"
+  Project     = "aks-cicd"
+  ManagedBy   = "terraform"
+  Owner       = "platform-team"
+  CostCenter  = "engineering"
+}

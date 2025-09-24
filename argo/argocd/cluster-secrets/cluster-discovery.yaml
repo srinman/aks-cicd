@@ -1,0 +1,62 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: cluster-discovery
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: cluster-discovery
+spec:
+  generators:
+  - clusters: {}
+  template:
+    metadata:
+      name: '{{name}}-cluster-apps'
+      labels:
+        cluster: '{{name}}'
+        environment: '{{metadata.labels.environment}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/your-org/aks-applications  # Update with your repo
+        targetRevision: HEAD
+        path: clusters/{{metadata.labels.environment}}
+      destination:
+        server: '{{server}}'
+        namespace: argocd-managed
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - PrunePropagationPolicy=foreground
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cluster-template
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: cluster
+type: Opaque
+stringData:
+  # This is a template secret showing the structure
+  # Actual cluster secrets will be created by Terraform in spoke clusters
+  name: spoke-cluster-template
+  server: https://spoke-cluster-api-server.com
+  config: |
+    {
+      "execProviderConfig": {
+        "command": "kubelogin",
+        "args": [
+          "get-token",
+          "--login", "azurecli",
+          "--server-id", "6dae42f8-4368-4678-94ff-3960e28e3630"
+        ],
+        "apiVersion": "client.authentication.k8s.io/v1beta1"
+      },
+      "tlsClientConfig": {
+        "insecure": false,
+        "caData": "LS0tLS1CRUdJTi..."
+      }
+    }

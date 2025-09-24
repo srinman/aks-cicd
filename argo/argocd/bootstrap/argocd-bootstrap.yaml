@@ -1,0 +1,228 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+  labels:
+    app.kubernetes.io/name: argocd
+    app.kubernetes.io/component: namespace
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-bootstrap
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: argocd-bootstrap
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://argoproj.github.io/argo-helm
+    chart: argo-cd
+    targetRevision: 5.51.6
+    helm:
+      parameters:
+        - name: global.domain
+          value: "argocd.your-domain.com"  # Update with your domain
+        - name: server.ingress.enabled
+          value: "true"
+        - name: server.ingress.ingressClassName
+          value: "nginx"
+        - name: server.ingress.annotations.cert-manager\.io/cluster-issuer
+          value: "letsencrypt-prod"
+        - name: server.ingress.tls[0].secretName
+          value: "argocd-server-tls"
+        - name: server.ingress.tls[0].hosts[0]
+          value: "argocd.your-domain.com"
+        - name: configs.params.server\.insecure
+          value: "false"
+        - name: configs.params.application\.instanceLabelKey
+          value: "argocd.argoproj.io/instance"
+      values: |
+        global:
+          domain: argocd.your-domain.com
+        
+        configs:
+          params:
+            # Disable TLS for internal communication (behind ingress)
+            server.insecure: false
+            # Enable application in any namespace
+            application.instanceLabelKey: argocd.argoproj.io/instance
+            # Increase timeout for large repositories
+            server.repo.server.timeout.seconds: "300"
+            
+          # RBAC configuration for Azure AD integration
+          rbac:
+            # Default policy for all authenticated users
+            policy.default: role:readonly
+            # Policy for different groups
+            policy.csv: |
+              # Cluster Admins - Full access
+              g, cluster-admins, role:admin
+              # Hub Operators - Admin access to hub, read access to spokes
+              g, hub-operators, role:admin
+              # Spoke Developers - Application access to their environments
+              g, spoke-developers, role:developer
+              
+              # Custom role for developers
+              p, role:developer, applications, *, */*, allow
+              p, role:developer, logs, get, */*, allow
+              p, role:developer, exec, create, */*, allow
+              
+          # Repository configuration
+          repositories: |
+            - type: git
+              url: https://github.com/your-org/aks-applications
+              name: applications
+            - type: helm
+              url: https://argoproj.github.io/argo-helm
+              name: argo-helm
+            - type: helm
+              url: https://kubernetes.github.io/ingress-nginx
+              name: ingress-nginx
+            - type: helm
+              url: https://jetstack.github.io/cert-manager
+              name: cert-manager
+        
+        # Application Controller Configuration
+        controller:
+          replicas: 2
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 500m
+              memory: 2Gi
+          nodeSelector:
+            workload-type: argocd
+          tolerations:
+            - key: workload-type
+              operator: Equal
+              value: argocd
+              effect: NoSchedule
+          
+          # Metrics and monitoring
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        
+        # Server Configuration
+        server:
+          replicas: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+          nodeSelector:
+            workload-type: argocd
+          tolerations:
+            - key: workload-type
+              operator: Equal
+              value: argocd
+              effect: NoSchedule
+          
+          # Ingress configuration
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              nginx.ingress.kubernetes.io/ssl-redirect: "true"
+              nginx.ingress.kubernetes.io/backend-protocol: "GRPC"
+            hosts:
+              - argocd.your-domain.com
+            tls:
+              - secretName: argocd-server-tls
+                hosts:
+                  - argocd.your-domain.com
+          
+          # Metrics
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        
+        # Repository Server Configuration
+        repoServer:
+          replicas: 2
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 200m
+              memory: 512Mi
+          nodeSelector:
+            workload-type: argocd
+          tolerations:
+            - key: workload-type
+              operator: Equal
+              value: argocd
+              effect: NoSchedule
+          
+          # Metrics
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: true
+        
+        # ApplicationSet Controller
+        applicationSet:
+          enabled: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          nodeSelector:
+            workload-type: argocd
+          tolerations:
+            - key: workload-type
+              operator: Equal
+              value: argocd
+              effect: NoSchedule
+        
+        # Notifications Controller
+        notifications:
+          enabled: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          nodeSelector:
+            workload-type: argocd
+          tolerations:
+            - key: workload-type
+              operator: Equal
+              value: argocd
+              effect: NoSchedule
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m0s
