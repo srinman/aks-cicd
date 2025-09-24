@@ -32,9 +32,9 @@ echo "Target Spoke Cluster: $SPOKE_CLUSTER_NAME"
 echo "Resource Group: $SPOKE_RG"
 echo ""
 
-# Connect to spoke cluster
+# Connect to spoke cluster using managed identity
 echo -e "${YELLOW}Connecting to spoke cluster...${NC}"
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing > /dev/null
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread > /dev/null
 
 # Check if namespace exists
 if ! kubectl get namespace demo-app > /dev/null 2>&1; then

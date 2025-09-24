@@ -81,8 +81,8 @@ If kubectl can't connect:
 # Verify cluster exists and is running
 az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --query provisioningState
 
-# Get credentials again
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing
+# Get credentials again using managed identity
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
 ```
 
 ### External IP Not Assigned

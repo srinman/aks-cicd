@@ -1,0 +1,10 @@
+# Example terraform.tfvars file
+# Copy this file to terraform.tfvars and update with your actual values
+
+# Spoke cluster configuration
+spoke_resource_group_name = "rg-aks-spoke-prod-001"
+spoke_cluster_name        = "aks-spoke-prod-001"
+
+# Hub cluster configuration (for managed identity reference)
+hub_resource_group_name = "rg-aks-hub-prod-001"
+hub_cluster_name        = "aks-hub-prod-001"

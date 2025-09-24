@@ -9,6 +9,9 @@ This document demonstrates how to use the hub cluster's managed identity to dire
 - Spoke cluster created (via Terraform or Azure CLI)
 - kubectl configured with hub cluster context
 - Azure CLI installed and authenticated
+- **Terraform** (optional, for automated cluster discovery - see `terraform/` directory)
+
+> **New Feature**: This guide now includes Terraform integration for automated spoke cluster discovery. Use `scripts/terraform-deploy.sh` for fully automated deployment or explore the `terraform/` directory for custom configurations.
 
 ## Overview
 
@@ -18,6 +21,35 @@ The hub cluster's managed identity enables direct cross-cluster operations by le
 2. **Cross-Cluster Operations**: Hub cluster workloads managing spoke cluster resources
 3. **Automated Deployments**: Scripted deployment without manual intervention
 4. **Azure RBAC Integration**: Leveraging Azure's native role-based access control
+
+## Deployment Options
+
+### Option 1: Terraform-Integrated Deployment (Recommended)
+
+For automated cluster discovery and deployment, use the Terraform integration:
+
+```bash
+# Navigate to the terraform directory and configure
+cd terraform/
+cp terraform.tfvars.example terraform.tfvars
+nano terraform.tfvars  # Update with your cluster details
+
+# Run the integrated deployment script
+cd ../scripts/
+./terraform-deploy.sh
+```
+
+This approach automatically:
+- Fetches spoke cluster endpoint and credentials using Terraform
+- Configures kubectl with managed identity authentication
+- Runs the deployment with proper environment variables
+- Provides comprehensive error handling and validation
+
+For detailed Terraform setup instructions, see [`terraform/README.md`](terraform/README.md).
+
+### Option 2: Manual Deployment
+
+Follow the step-by-step instructions below for manual cluster discovery and deployment.
 
 ## Step 1: Discover and Connect to New Spoke Cluster
 
@@ -229,8 +261,9 @@ check_success() {
 # Step 1: Get spoke cluster credentials using hub identity
 echo -e "${YELLOW}Step 1: Authenticating to spoke cluster using hub managed identity${NC}"
 
-# Get spoke cluster credentials
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing
+# Get spoke cluster credentials using managed identity (Azure AD auth)
+echo "Getting spoke cluster credentials..."
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
 check_success "Retrieved spoke cluster credentials"
 
 # Test cluster connectivity
@@ -352,9 +385,9 @@ echo "==============================="
 echo "Target Spoke Cluster: $SPOKE_CLUSTER_NAME"
 echo ""
 
-# Get spoke cluster credentials
+# Get spoke cluster credentials using managed identity
 echo -e "${YELLOW}Connecting to spoke cluster...${NC}"
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
 
 # Check if namespace exists
 if kubectl get namespace demo-app > /dev/null 2>&1; then
@@ -448,8 +481,8 @@ spec:
             # Login using managed identity
             az login --identity --username \$HUB_IDENTITY_CLIENT_ID
             
-            # Get spoke cluster credentials
-            az aks get-credentials --resource-group \$SPOKE_RG --name \$SPOKE_CLUSTER_NAME
+            # Get spoke cluster credentials using managed identity
+            az aks get-credentials --resource-group \$SPOKE_RG --name \$SPOKE_CLUSTER_NAME --use-azuread
             
             # Create deployment manifests
             mkdir -p /tmp/manifests
@@ -580,8 +613,8 @@ kubectl describe job hub-to-spoke-deployment
 ### 3.3 Verify Spoke Cluster Resources
 
 ```bash
-# Switch to spoke cluster to verify resources
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME
+# Switch to spoke cluster to verify resources using managed identity
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
 
 echo "Verifying resources on spoke cluster..."
 kubectl get namespace demo-app
@@ -681,8 +714,8 @@ SPOKE_RG=${SPOKE_RG:-"myorg-dev-rg"}
 echo "🔍 Verifying hub-to-spoke deployment"
 echo "===================================="
 
-# Connect to spoke cluster
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME
+# Connect to spoke cluster using managed identity
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
 
 # Check namespace
 echo "1. Namespace status:"

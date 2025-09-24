@@ -62,8 +62,8 @@ fi
 echo -e "${GREEN}✅ Spoke cluster found${NC}"
 
 # Get spoke cluster credentials
-echo -e "${YELLOW}Getting spoke cluster credentials...${NC}"
-az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing
+echo -e "${YELLOW}Getting spoke cluster credentials using managed identity...${NC}"
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
 
 # Test connectivity
 kubectl cluster-info --request-timeout=10s > /dev/null
