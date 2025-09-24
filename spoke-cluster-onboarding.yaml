@@ -1,0 +1,33 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: spoke-cluster-onboarding
+  namespace: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          environment: spoke
+  template:
+    metadata:
+      name: '{{name}}-onboarding'
+      labels:
+        environment: '{{metadata.labels.environment}}'
+        cluster-type: spoke
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/your-org/aks-spoke-bootstrap
+        path: overlays/{{metadata.labels.environment}}
+        targetRevision: main
+      destination:
+        server: '{{server}}'
+        namespace: argocd-managed
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true

@@ -1,0 +1,21 @@
+{
+  "Name": "myorg-ArgoCD-Hub-Operator",
+  "Description": "Custom role for ArgoCD hub cluster operations across spoke clusters",
+  "Actions": [
+    "Microsoft.ContainerService/managedClusters/read",
+    "Microsoft.ContainerService/managedClusters/listClusterUserCredential/action",
+    "Microsoft.ContainerService/managedClusters/listClusterMonitoringUserCredential/action",
+    "Microsoft.Resources/subscriptions/resourceGroups/read",
+    "Microsoft.ManagedIdentity/userAssignedIdentities/read",
+    "Microsoft.Insights/components/read",
+    "Microsoft.OperationalInsights/workspaces/read",
+    "Microsoft.Network/virtualNetworks/read",
+    "Microsoft.Network/virtualNetworks/subnets/read"
+  ],
+  "NotActions": [],
+  "DataActions": [],
+  "NotDataActions": [],
+  "AssignableScopes": [
+    "/subscriptions/3eef5dad-ad68-4246-8e02-e13d661de047"
+  ]
+}

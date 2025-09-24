@@ -1,0 +1,102 @@
+global:
+  domain: argocd.local  # Update with your domain
+
+configs:
+  params:
+    server.insecure: false
+    application.instanceLabelKey: argocd.argoproj.io/instance
+    server.repo.server.timeout.seconds: "300"
+    
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      g, cluster-admins, role:admin
+      g, hub-operators, role:admin
+      
+      p, role:developer, applications, *, */*, allow
+      p, role:developer, logs, get, */*, allow
+      p, role:developer, exec, create, */*, allow
+
+# Application Controller Configuration
+controller:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: 500m
+      memory: 2Gi
+  nodeSelector:
+    workload-type: argocd
+  tolerations:
+    - key: workload-type
+      operator: Equal
+      value: argocd
+      effect: NoSchedule
+  metrics:
+    enabled: true
+
+# Server Configuration  
+server:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  nodeSelector:
+    workload-type: argocd
+  tolerations:
+    - key: workload-type
+      operator: Equal
+      value: argocd
+      effect: NoSchedule
+  service:
+    type: LoadBalancer
+  metrics:
+    enabled: true
+
+# Repository Server Configuration
+repoServer:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  nodeSelector:
+    workload-type: argocd
+  tolerations:
+    - key: workload-type
+      operator: Equal
+      value: argocd
+      effect: NoSchedule
+  metrics:
+    enabled: true
+
+# ApplicationSet Controller
+applicationSet:
+  enabled: true
+  nodeSelector:
+    workload-type: argocd
+  tolerations:
+    - key: workload-type
+      operator: Equal
+      value: argocd
+      effect: NoSchedule
+
+# Notifications Controller
+notifications:
+  enabled: true
+  nodeSelector:
+    workload-type: argocd
+  tolerations:
+    - key: workload-type
+      operator: Equal
+      value: argocd
+      effect: NoSchedule

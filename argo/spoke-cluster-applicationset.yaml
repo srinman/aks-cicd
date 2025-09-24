@@ -1,0 +1,44 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: spoke-cluster-bootstrap
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: spoke-cluster-bootstrap
+    app.kubernetes.io/managed-by: argocd
+spec:
+  generators:
+  - clusters:
+      selector:
+        matchLabels:
+          environment: spoke
+  template:
+    metadata:
+      name: '{{name}}-bootstrap'
+      labels:
+        environment: '{{metadata.labels.environment}}'
+        cluster-type: spoke
+        managed-by: applicationset
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/srinman/aks-cicd
+        path: argo/spoke-bootstrap/overlays/{{metadata.labels.environment}}
+        targetRevision: main
+      destination:
+        server: '{{server}}'
+        namespace: argocd-managed
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - ServerSideApply=true
+          - RespectIgnoreDifferences=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
