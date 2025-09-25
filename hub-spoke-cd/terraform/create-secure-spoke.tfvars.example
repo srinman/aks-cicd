@@ -1,0 +1,21 @@
+# Example variables for creating a secure spoke cluster
+# Copy this to terraform.tfvars and customize for your environment
+
+# Spoke cluster configuration
+spoke_cluster_name         = "aks-spoke-secure-001"
+spoke_resource_group_name  = "rg-aks-spoke-secure-001"
+spoke_location            = "East US"
+
+# Node configuration
+node_count   = 3
+node_vm_size = "Standard_D2s_v3"
+
+# Azure AD configuration
+# Replace with your actual Azure AD group object IDs
+aad_admin_group_object_ids = [
+  "12345678-1234-5678-9012-123456789012"  # Replace with your admin group ID
+]
+
+# Hub cluster configuration
+# Replace with your actual hub cluster resource ID
+hub_cluster_resource_id = "/subscriptions/your-subscription-id/resourceGroups/rg-aks-hub/providers/Microsoft.ContainerService/managedClusters/aks-hub-001"

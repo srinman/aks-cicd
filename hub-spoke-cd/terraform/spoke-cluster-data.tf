@@ -81,6 +81,16 @@ output "spoke_cluster_id" {
   value       = data.azurerm_kubernetes_cluster.spoke.id
 }
 
+output "spoke_local_accounts_disabled" {
+  description = "Whether local admin accounts are disabled on spoke cluster"
+  value       = data.azurerm_kubernetes_cluster.spoke.local_account_disabled
+}
+
+output "spoke_aad_enabled" {
+  description = "Whether Azure AD integration is enabled on spoke cluster"
+  value       = length(data.azurerm_kubernetes_cluster.spoke.azure_active_directory_role_based_access_control) > 0
+}
+
 output "hub_identity_client_id" {
   description = "Hub cluster managed identity client ID"
   value       = data.azurerm_kubernetes_cluster.hub.kubelet_identity[0].client_id

@@ -63,6 +63,15 @@ echo -e "${GREEN}✅ Spoke cluster found${NC}"
 
 # Get spoke cluster credentials
 echo -e "${YELLOW}Getting spoke cluster credentials using managed identity...${NC}"
+
+# Check if local admin is disabled (recommended security practice)
+LOCAL_DISABLED=$(az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --query "disableLocalAccounts" -o tsv 2>/dev/null || echo "false")
+if [[ "$LOCAL_DISABLED" == "true" ]]; then
+    echo -e "${GREEN}✓ Local admin accounts are disabled (secure configuration)${NC}"
+else
+    echo -e "${YELLOW}⚠ Local admin accounts are enabled (consider disabling for production)${NC}"
+fi
+
 az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
 
 # Test connectivity

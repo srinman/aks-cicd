@@ -22,6 +22,92 @@ The hub cluster's managed identity enables direct cross-cluster operations by le
 3. **Automated Deployments**: Scripted deployment without manual intervention
 4. **Azure RBAC Integration**: Leveraging Azure's native role-based access control
 
+## Security Configuration
+
+### Disabling Local Admin Account on Spoke Clusters
+
+For enhanced security, it's recommended to disable the local admin account on spoke clusters and rely exclusively on Azure AD authentication. This ensures all access is audited and follows Azure RBAC policies.
+
+#### Option 1: Disable Local Admin on Existing Cluster
+
+```bash
+# Disable local admin account on existing spoke cluster
+az aks update \
+    --resource-group $SPOKE_RG \
+    --name $SPOKE_CLUSTER_NAME \
+    --disable-local-accounts
+
+# Verify the change
+az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME \
+    --query "disableLocalAccounts" -o tsv
+```
+
+#### Option 2: Create New Spoke Cluster Without Local Admin
+
+```bash
+# Create spoke cluster with local admin disabled from the start
+az aks create \
+    --resource-group $SPOKE_RG \
+    --name $SPOKE_CLUSTER_NAME \
+    --location eastus \
+    --node-count 3 \
+    --node-vm-size Standard_D2s_v3 \
+    --enable-managed-identity \
+    --disable-local-accounts \
+    --enable-aad \
+    --aad-admin-group-object-ids "your-admin-group-id" \
+    --generate-ssh-keys
+```
+
+#### Option 3: Terraform Configuration for Spoke Cluster
+
+```hcl
+resource "azurerm_kubernetes_cluster" "spoke" {
+  name                = "aks-spoke-prod-001"
+  location            = azurerm_resource_group.spoke.location
+  resource_group_name = azurerm_resource_group.spoke.name
+  dns_prefix          = "aks-spoke-prod"
+  
+  # Disable local admin account for enhanced security
+  local_account_disabled = true
+  
+  # Enable Azure AD integration
+  azure_active_directory_role_based_access_control {
+    managed = true
+    admin_group_object_ids = [var.aad_admin_group_id]
+  }
+  
+  default_node_pool {
+    name       = "default"
+    node_count = 3
+    vm_size    = "Standard_D2s_v3"
+  }
+  
+  identity {
+    type = "SystemAssigned"
+  }
+}
+```
+
+#### Verification
+
+After disabling local accounts, verify that only Azure AD authentication works:
+
+```bash
+# This should work (Azure AD auth)
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
+
+# This should fail (local admin auth)
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --admin
+```
+
+#### Important Notes
+
+- **Breaking Change**: Once disabled, local admin access cannot be restored without re-enabling
+- **Emergency Access**: Ensure you have proper Azure AD admin group configured before disabling
+- **CI/CD Impact**: All automation must use `--use-azuread` flag or managed identity authentication
+- **Existing kubeconfig**: Users need to re-run `az aks get-credentials` with `--use-azuread` flag
+
 ## Deployment Options
 
 ### Option 1: Terraform-Integrated Deployment (Recommended)
@@ -849,3 +935,160 @@ This document demonstrated how to:
 - All operations are audited through Azure Activity Log
 
 This approach forms the foundation for GitOps workflows where ArgoCD uses similar mechanisms to deploy applications across the hub-spoke architecture.
+
+## Troubleshooting
+
+### Common Issues with Azure AD Authentication
+
+#### Issue 1: "error: You must be logged in to the server (Unauthorized)"
+
+**Cause**: Local admin account is disabled and Azure AD authentication is not properly configured.
+
+**Solution**:
+```bash
+# Re-authenticate with Azure AD
+az login
+
+# Ensure you're using the correct subscription
+az account show
+az account set --subscription "your-subscription-id"
+
+# Get credentials with Azure AD authentication
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread --overwrite-existing
+
+# Test connection
+kubectl cluster-info
+```
+
+#### Issue 2: "The client does not have authorization to perform action"
+
+**Cause**: Hub cluster managed identity lacks proper RBAC permissions on spoke cluster.
+
+**Solution**:
+```bash
+# Check current role assignments on spoke cluster
+az role assignment list --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$SPOKE_RG/providers/Microsoft.ContainerService/managedClusters/$SPOKE_CLUSTER_NAME"
+
+# Get hub cluster managed identity
+HUB_IDENTITY=$(az aks show --resource-group $HUB_RG --name $HUB_CLUSTER_NAME --query "kubeletIdentity.objectId" -o tsv)
+
+# Assign required role
+az role assignment create \
+    --assignee $HUB_IDENTITY \
+    --role "Azure Kubernetes Service Cluster Admin Role" \
+    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$SPOKE_RG/providers/Microsoft.ContainerService/managedClusters/$SPOKE_CLUSTER_NAME"
+```
+
+#### Issue 3: "Local admin account is disabled"
+
+**Cause**: Attempting to use `--admin` flag when local accounts are disabled.
+
+**Solution**:
+```bash
+# Remove --admin flag and use --use-azuread instead
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
+
+# If you need to re-enable local accounts (not recommended for production)
+az aks update --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --enable-local-accounts
+```
+
+#### Issue 4: "Token refresh failed"
+
+**Cause**: Azure AD token has expired or is invalid.
+
+**Solution**:
+```bash
+# Clear kubectl context and re-authenticate
+kubectl config delete-context $SPOKE_CLUSTER_NAME
+kubectl config delete-cluster $SPOKE_CLUSTER_NAME
+kubectl config delete-user $SPOKE_CLUSTER_NAME
+
+# Re-authenticate
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread --overwrite-existing
+
+# Or refresh Azure CLI login
+az login --use-device-code
+```
+
+#### Issue 5: Terraform Authentication Errors
+
+**Cause**: Terraform cannot authenticate to Azure or access resources.
+
+**Solution**:
+```bash
+# Verify Azure CLI authentication
+az account show
+
+# If using service principal, check environment variables
+echo $ARM_CLIENT_ID
+echo $ARM_SUBSCRIPTION_ID
+echo $ARM_TENANT_ID
+
+# Re-initialize Terraform
+cd terraform/
+rm -rf .terraform/
+terraform init
+terraform plan
+```
+
+### Verification Commands
+
+#### Check Cluster Security Configuration
+
+```bash
+# Verify local accounts are disabled
+az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME \
+    --query "disableLocalAccounts" -o tsv
+
+# Check Azure AD configuration
+az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME \
+    --query "aadProfile" -o table
+
+# List role assignments on spoke cluster
+az role assignment list \
+    --scope "/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$SPOKE_RG/providers/Microsoft.ContainerService/managedClusters/$SPOKE_CLUSTER_NAME" \
+    --output table
+```
+
+#### Validate Hub Identity Permissions
+
+```bash
+# Get hub cluster identity
+HUB_IDENTITY=$(az aks show --resource-group $HUB_RG --name $HUB_CLUSTER_NAME --query "kubeletIdentity.objectId" -o tsv)
+
+# Check what roles the hub identity has on spoke cluster
+az role assignment list --assignee $HUB_IDENTITY --output table
+
+# Verify identity can access spoke cluster
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
+kubectl auth can-i "*" "*" --all-namespaces
+```
+
+### Security Best Practices
+
+1. **Always disable local admin accounts** on production spoke clusters
+2. **Use Azure AD groups** for administrative access instead of individual users
+3. **Implement least privilege** - grant only the minimum required permissions
+4. **Regular audit** role assignments and access patterns
+5. **Enable audit logging** on all clusters for compliance and security monitoring
+6. **Use managed identity** for all service-to-service authentication
+7. **Rotate credentials** regularly and remove unused service principals
+
+### Emergency Access Procedures
+
+If you lose access to a spoke cluster with disabled local accounts:
+
+1. **Through Azure Portal**: Use the "Run command" feature to execute kubectl commands
+2. **Through Azure CLI**: Use `az aks command invoke` to run commands without kubeconfig
+3. **Re-enable local accounts** temporarily if absolutely necessary:
+
+```bash
+# Emergency re-enable (use with caution)
+az aks update --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --enable-local-accounts
+
+# Get admin credentials
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --admin --overwrite-existing
+
+# Fix the issue, then disable local accounts again
+az aks update --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --disable-local-accounts
+```

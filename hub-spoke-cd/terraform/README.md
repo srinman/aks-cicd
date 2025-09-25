@@ -292,6 +292,33 @@ chmod +x ../scripts/configure-kubectl.sh
    - Use resource-scoped role assignments
    - Regularly audit and rotate credentials
 
+4. **Local Admin Account Security**
+   - Always disable local admin accounts on production clusters
+   - Use `create-secure-spoke-cluster.tf` for new cluster creation
+   - Ensure Azure AD integration is properly configured
+   - Test Azure AD authentication before disabling local accounts
+
+### Creating Secure Spoke Clusters
+
+To create a spoke cluster with local admin disabled from the start:
+
+```bash
+# Use the secure cluster configuration
+cp create-secure-spoke.tfvars.example create-secure-spoke.tfvars
+nano create-secure-spoke.tfvars  # Update with your values
+
+# Apply the secure configuration
+terraform init
+terraform plan -var-file="create-secure-spoke.tfvars"
+terraform apply -var-file="create-secure-spoke.tfvars"
+```
+
+This ensures:
+- Local admin account is disabled (`local_account_disabled = true`)
+- Azure AD integration is mandatory
+- Hub cluster automatically gets admin access
+- All authentication goes through Azure AD
+
 ## Advanced Usage
 
 ### Custom Data Sources
