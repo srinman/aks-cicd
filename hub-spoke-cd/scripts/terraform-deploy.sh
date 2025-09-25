@@ -94,7 +94,6 @@ if [[ $? -eq 0 ]] && [[ -n "$ENV_VARS" ]]; then
     export SPOKE_RG=$(echo "$ENV_VARS" | jq -r '.SPOKE_RG')
     export SPOKE_CLUSTER_NAME=$(echo "$ENV_VARS" | jq -r '.SPOKE_CLUSTER_NAME')
     export SPOKE_FQDN=$(echo "$ENV_VARS" | jq -r '.SPOKE_FQDN')
-    export HUB_IDENTITY_CLIENT_ID=$(echo "$ENV_VARS" | jq -r '.HUB_IDENTITY_CLIENT_ID')
 else
     # Method 2: Extract individual outputs (fallback)
     print_warning "JSON output parsing failed, using individual outputs..."
@@ -104,8 +103,7 @@ else
         export SPOKE_RG=$(grep '^spoke_resource_group_name' terraform.tfvars | cut -d'"' -f2)
         export SPOKE_CLUSTER_NAME=$(grep '^spoke_cluster_name' terraform.tfvars | cut -d'"' -f2)
         
-        # Try to get identity from terraform output
-        export HUB_IDENTITY_CLIENT_ID=$(terraform output -raw hub_identity_client_id 2>/dev/null || echo "")
+        # Get cluster FQDN from terraform output
         export SPOKE_FQDN=$(terraform output -raw spoke_cluster_fqdn 2>/dev/null || echo "")
     else
         print_error "Could not extract cluster information"
@@ -125,7 +123,6 @@ print_success "Cluster information extracted:"
 echo "  Resource Group: $SPOKE_RG"
 echo "  Cluster Name: $SPOKE_CLUSTER_NAME"
 echo "  FQDN: ${SPOKE_FQDN:-'N/A'}"
-echo "  Hub Identity: ${HUB_IDENTITY_CLIENT_ID:-'N/A'}"
 
 # Generate kubectl config command
 KUBECTL_CONFIG_CMD=$(terraform output -raw kubectl_config_command 2>/dev/null || echo "az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread --overwrite-existing")
@@ -159,7 +156,6 @@ if [[ -f "quick-deploy.sh" ]]; then
     export SPOKE_RG
     export SPOKE_CLUSTER_NAME
     export SPOKE_FQDN
-    export HUB_IDENTITY_CLIENT_ID
     
     print_status "Starting deployment script..."
     ./quick-deploy.sh

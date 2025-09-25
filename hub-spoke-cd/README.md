@@ -4,14 +4,16 @@ This document demonstrates how to use the hub cluster's managed identity to dire
 
 ## Prerequisites
 
-- Hub cluster with managed identity configured
-- Hub cluster managed identity has "Azure Kubernetes Service Cluster Admin Role" on spoke cluster
-- Spoke cluster created (via Terraform or Azure CLI)
+- **Hub cluster with workload identity enabled** (recommended) or managed identity configured
+- **Azure AD application with federated credentials** for workload identity (see setup guide)
+- **Service account** in hub cluster configured for workload identity
+- **RBAC permissions**: Workload identity service principal should have "Azure Kubernetes Service Cluster Admin Role" on spoke cluster(s)
+- Spoke cluster created (via Terraform or Azure CLI) with local admin disabled
 - kubectl configured with hub cluster context
 - Azure CLI installed and authenticated
-- **Terraform** (optional, for automated cluster discovery - see `terraform/` directory)
+- **Terraform** (optional, for automated cluster discovery and workload identity setup)
 
-> **New Feature**: This guide now includes Terraform integration for automated spoke cluster discovery. Use `scripts/terraform-deploy.sh` for fully automated deployment or explore the `terraform/` directory for custom configurations.
+> **🏆 Recommended Setup**: This guide now uses **Azure Workload Identity** as the primary authentication method. For setup instructions, see [WORKLOAD-IDENTITY-SETUP.md](WORKLOAD-IDENTITY-SETUP.md). Terraform automation is available in the `terraform/` directory.
 
 ## Overview
 
@@ -108,34 +110,59 @@ az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --a
 - **CI/CD Impact**: All automation must use `--use-azuread` flag or managed identity authentication
 - **Existing kubeconfig**: Users need to re-run `az aks get-credentials` with `--use-azuread` flag
 
-## Deployment Options
+#### Authentication for Hub-to-Spoke Operations
 
-### Option 1: Terraform-Integrated Deployment (Recommended)
+All hub-to-spoke operations use **Azure Workload Identity** for secure, credential-free authentication.
 
-For automated cluster discovery and deployment, use the Terraform integration:
-
+**Workload Identity Authentication:**
 ```bash
-# Navigate to the terraform directory and configure
-cd terraform/
-cp terraform.tfvars.example terraform.tfvars
-nano terraform.tfvars  # Update with your cluster details
-
-# Run the integrated deployment script
-cd ../scripts/
-./terraform-deploy.sh
+# Connect to spoke cluster using workload identity
+az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --use-azuread
+kubelogin convert-kubeconfig -l workloadidentity
 ```
 
-This approach automatically:
-- Fetches spoke cluster endpoint and credentials using Terraform
-- Configures kubectl with managed identity authentication
-- Runs the deployment with proper environment variables
-- Provides comprehensive error handling and validation
+Environment variables are automatically injected by the workload identity webhook:
+- `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`, `AZURE_AUTHORITY_HOST`
 
-For detailed Terraform setup instructions, see [`terraform/README.md`](terraform/README.md).
+> 📖 **Setup Required**: Complete the one-time setup in [WORKLOAD-IDENTITY-SETUP.md](WORKLOAD-IDENTITY-SETUP.md)
 
-### Option 2: Manual Deployment
+## Deployment
 
-Follow the step-by-step instructions below for manual cluster discovery and deployment.
+All deployments use **Azure Workload Identity** for secure authentication.
+
+### Step 1: Set up workload identity (one-time setup)
+
+**Option A: Automated setup using Terraform**
+```bash
+cd terraform/
+cp workload-identity.tfvars.example workload-identity.tfvars
+nano workload-identity.tfvars  # Update with your cluster details
+
+# Apply workload identity configuration
+terraform init
+terraform plan -var-file="workload-identity.tfvars"
+terraform apply -var-file="workload-identity.tfvars"
+```
+
+**Option B: Manual setup using the step-by-step guide**
+```bash
+# Follow detailed instructions in WORKLOAD-IDENTITY-SETUP.md
+```
+
+### Step 2: Deploy using workload identity
+
+**Recommended: Kubernetes Job deployment**
+```bash
+# Use the workload identity-enabled Kubernetes Job
+kubectl apply -f workload-identity-job-example.yaml
+
+# Monitor the deployment
+kubectl logs -f job/hub-to-spoke-workload-identity-deployment -n hub-operations
+```
+
+**Alternative: Manual deployment**
+
+Follow the step-by-step instructions below for manual deployment with workload identity.
 
 ## Step 1: Discover and Connect to New Spoke Cluster
 
@@ -179,12 +206,27 @@ echo "Server Endpoint: https://$SPOKE_CLUSTER_FQDN"
 # Get hub cluster managed identity details
 HUB_RG="myorg-hub-rg"
 HUB_IDENTITY_NAME="myorg-hub-identity"
+HUB_CLUSTER_NAME="myorg-hub-aks"
 
 HUB_IDENTITY_PRINCIPAL_ID=$(az identity show --resource-group $HUB_RG --name $HUB_IDENTITY_NAME --query principalId -o tsv)
 HUB_IDENTITY_CLIENT_ID=$(az identity show --resource-group $HUB_RG --name $HUB_IDENTITY_NAME --query clientId -o tsv)
 
 echo "Hub Identity Principal ID: $HUB_IDENTITY_PRINCIPAL_ID"
 echo "Hub Identity Client ID: $HUB_IDENTITY_CLIENT_ID"
+
+# Create federated credentials for workload identity authentication
+echo "Creating federated credentials for workload identity..."
+AKS_OIDC_ISSUER=$(az aks show --resource-group $HUB_RG --name $HUB_CLUSTER_NAME --query "oidcIssuerProfile.issuerUrl" -o tsv)
+
+az identity federated-credential create \
+    --name "hub-to-spoke-federated-credential" \
+    --identity-name $HUB_IDENTITY_NAME \
+    --resource-group $HUB_RG \
+    --issuer $AKS_OIDC_ISSUER \
+    --subject system:serviceaccount:hub-operations:hub-to-spoke-sa \
+    --audience api://AzureADTokenExchange
+
+echo "✅ Federated credentials created for workload identity"
 
 # Verify hub identity has required permissions on spoke cluster
 echo ""
@@ -319,7 +361,6 @@ set -e
 # Configuration
 SPOKE_CLUSTER_NAME=${SPOKE_CLUSTER_NAME:-"myorg-dev-aks"}
 SPOKE_RG=${SPOKE_RG:-"myorg-dev-rg"}
-HUB_IDENTITY_CLIENT_ID=${HUB_IDENTITY_CLIENT_ID}
 
 # Colors for output
 RED='\033[0;31m'
@@ -344,12 +385,15 @@ check_success() {
     fi
 }
 
-# Step 1: Get spoke cluster credentials using hub identity
-echo -e "${YELLOW}Step 1: Authenticating to spoke cluster using hub managed identity${NC}"
+# Step 1: Authenticate to spoke cluster using workload identity
+echo -e "${YELLOW}Step 1: Authenticating to spoke cluster using workload identity${NC}"
 
-# Get spoke cluster credentials using managed identity (Azure AD auth)
+# Get spoke cluster credentials and configure for workload identity
 echo "Getting spoke cluster credentials..."
 az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
+
+echo "Configuring kubeconfig for workload identity authentication..."
+kubelogin convert-kubeconfig -l workloadidentity
 check_success "Retrieved spoke cluster credentials"
 
 # Test cluster connectivity
@@ -527,7 +571,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: hub-to-spoke-deployment
-  namespace: default
+  namespace: hub-operations  # Use the workload identity namespace
   labels:
     job-type: cross-cluster-deployment
 spec:
@@ -538,7 +582,7 @@ spec:
         azure.workload.identity/use: "true"
         job-type: cross-cluster-deployment
     spec:
-      serviceAccountName: default  # Use default SA with workload identity
+      serviceAccountName: hub-to-spoke-sa  # Use workload identity service account
       restartPolicy: OnFailure
       containers:
       - name: deployment-container
@@ -548,8 +592,11 @@ spec:
           value: "$SPOKE_CLUSTER_NAME"
         - name: SPOKE_RG
           value: "$SPOKE_RG"
-        - name: HUB_IDENTITY_CLIENT_ID
-          value: "$HUB_IDENTITY_CLIENT_ID"
+        # Workload identity environment variables are automatically injected:
+        # - AZURE_CLIENT_ID
+        # - AZURE_TENANT_ID  
+        # - AZURE_FEDERATED_TOKEN_FILE
+        # - AZURE_AUTHORITY_HOST
         command: ["/bin/bash"]
         args:
           - -c
@@ -559,16 +606,61 @@ spec:
             echo "Hub Identity Client ID: \$HUB_IDENTITY_CLIENT_ID"
             echo "Target: \$SPOKE_CLUSTER_NAME in \$SPOKE_RG"
             
+            # Install required packages (Alpine Linux packages)
+            echo "Installing required packages..."
+            apk add --no-cache curl tar gzip
+            
             # Install kubectl
+            echo "Installing kubectl..."
             curl -LO "https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
             chmod +x kubectl
             mv kubectl /usr/local/bin/
+            echo "✅ kubectl installed successfully"
             
-            # Login using managed identity
-            az login --identity --username \$HUB_IDENTITY_CLIENT_ID
+            # Install kubelogin - direct binary download (more reliable)
+            echo "Installing kubelogin..."
+            KUBELOGIN_VERSION=\$(curl -s https://api.github.com/repos/Azure/kubelogin/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+            curl -L "https://github.com/Azure/kubelogin/releases/download/\${KUBELOGIN_VERSION}/kubelogin-linux-amd64.zip" -o kubelogin.zip
             
-            # Get spoke cluster credentials using managed identity
+            # Check if unzip is available, if not install it
+            if ! command -v unzip &> /dev/null; then
+                echo "Installing unzip..."
+                apk add --no-cache unzip
+            fi
+            
+            unzip kubelogin.zip
+            mv bin/linux_amd64/kubelogin /usr/local/bin/
+            chmod +x /usr/local/bin/kubelogin
+            rm -f kubelogin.zip
+            echo "✅ kubelogin installed successfully"
+            
+            # Verify workload identity environment variables
+            echo "Using workload identity authentication"
+            echo "AZURE_CLIENT_ID: \$AZURE_CLIENT_ID"
+            echo "AZURE_TENANT_ID: \$AZURE_TENANT_ID"
+            echo "AZURE_FEDERATED_TOKEN_FILE: \$AZURE_FEDERATED_TOKEN_FILE"
+            
+            # Authenticate using workload identity token
+            echo "Authenticating with Azure using workload identity..."
+            if [ -f "\$AZURE_FEDERATED_TOKEN_FILE" ]; then
+                az login --service-principal \\
+                    --username "\$AZURE_CLIENT_ID" \\
+                    --tenant "\$AZURE_TENANT_ID" \\
+                    --federated-token "\$(cat \$AZURE_FEDERATED_TOKEN_FILE)"
+                echo "✅ Successfully authenticated using workload identity"
+            else
+                echo "❌ Federated token file not found: \$AZURE_FEDERATED_TOKEN_FILE"
+                exit 1
+            fi
+            
+            # Verify authentication
+            az account show
+            
+            # Get spoke cluster credentials using workload identity
             az aks get-credentials --resource-group \$SPOKE_RG --name \$SPOKE_CLUSTER_NAME --use-azuread
+            
+            # Configure kubeconfig for workload identity
+            kubelogin convert-kubeconfig -l workloadidentity
             
             # Create deployment manifests
             mkdir -p /tmp/manifests
@@ -662,6 +754,26 @@ spec:
             echo "✅ Hub-to-spoke deployment completed successfully!"
             echo "🔗 Resources deployed to spoke cluster: \$SPOKE_CLUSTER_NAME"
 EOF
+
+# Create the hub-operations namespace if it doesn't exist
+echo "Creating hub-operations namespace..."
+kubectl create namespace hub-operations --dry-run=client -o yaml | kubectl apply -f -
+
+# Create the service account for workload identity
+echo "Creating service account for workload identity..."
+cat > hub-to-spoke-sa.yaml << EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hub-to-spoke-sa
+  namespace: hub-operations
+  annotations:
+    azure.workload.identity/client-id: "$HUB_IDENTITY_CLIENT_ID"
+  labels:
+    azure.workload.identity/use: "true"
+EOF
+
+kubectl apply -f hub-to-spoke-sa.yaml
 
 # Apply the job
 kubectl apply -f hub-deployment-job.yaml

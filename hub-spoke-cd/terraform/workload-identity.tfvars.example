@@ -1,0 +1,27 @@
+# Example terraform.tfvars for workload identity setup
+# Copy this file to workload-identity.tfvars and customize for your environment
+
+# Hub cluster configuration
+hub_cluster_name         = "aks-hub-prod-001"
+hub_resource_group_name  = "rg-aks-hub-prod-001"
+
+# Workload identity configuration
+application_name          = "hub-to-spoke-workload-identity"
+service_account_namespace = "hub-operations"
+service_account_name      = "hub-to-spoke-sa"
+
+# Spoke clusters to grant access to
+spoke_clusters = {
+  dev = {
+    name                = "aks-spoke-dev-001"
+    resource_group_name = "rg-aks-spoke-dev-001"
+  }
+  staging = {
+    name                = "aks-spoke-staging-001"
+    resource_group_name = "rg-aks-spoke-staging-001"
+  }
+  prod = {
+    name                = "aks-spoke-prod-001"
+    resource_group_name = "rg-aks-spoke-prod-001"
+  }
+}

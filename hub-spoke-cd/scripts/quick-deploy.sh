@@ -7,8 +7,6 @@ set -e
 # Configuration (set these environment variables)
 SPOKE_CLUSTER_NAME=${SPOKE_CLUSTER_NAME:-""}
 SPOKE_RG=${SPOKE_RG:-""}
-HUB_RG=${HUB_RG:-"myorg-hub-rg"}
-HUB_IDENTITY_NAME=${HUB_IDENTITY_NAME:-"myorg-hub-identity"}
 
 # Colors for output
 RED='\033[0;31m'
@@ -37,16 +35,15 @@ echo "Target Spoke Cluster: $SPOKE_CLUSTER_NAME"
 echo "Resource Group: $SPOKE_RG"
 echo ""
 
-# Get hub identity details
-echo -e "${YELLOW}Getting hub cluster identity details...${NC}"
-HUB_IDENTITY_CLIENT_ID=$(az identity show --resource-group $HUB_RG --name $HUB_IDENTITY_NAME --query clientId -o tsv 2>/dev/null)
-
-if [ -z "$HUB_IDENTITY_CLIENT_ID" ]; then
-    echo -e "${RED}❌ Could not find hub identity. Please check HUB_RG and HUB_IDENTITY_NAME${NC}"
+# Verify workload identity environment
+echo -e "${YELLOW}Verifying workload identity environment...${NC}"
+if [[ -z "${AZURE_CLIENT_ID:-}" ]]; then
+    echo -e "${RED}❌ AZURE_CLIENT_ID not found. Workload identity may not be configured correctly.${NC}"
+    echo "Please ensure workload identity is set up according to WORKLOAD-IDENTITY-SETUP.md"
     exit 1
 fi
 
-echo "Hub Identity Client ID: $HUB_IDENTITY_CLIENT_ID"
+echo "Using Workload Identity - Client ID: $AZURE_CLIENT_ID"
 
 # Verify spoke cluster exists
 echo -e "${YELLOW}Verifying spoke cluster exists...${NC}"
@@ -62,7 +59,7 @@ fi
 echo -e "${GREEN}✅ Spoke cluster found${NC}"
 
 # Get spoke cluster credentials
-echo -e "${YELLOW}Getting spoke cluster credentials using managed identity...${NC}"
+echo -e "${YELLOW}Getting spoke cluster credentials using Azure AD authentication...${NC}"
 
 # Check if local admin is disabled (recommended security practice)
 LOCAL_DISABLED=$(az aks show --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --query "disableLocalAccounts" -o tsv 2>/dev/null || echo "false")
@@ -72,7 +69,13 @@ else
     echo -e "${YELLOW}⚠ Local admin accounts are enabled (consider disabling for production)${NC}"
 fi
 
+# Get credentials using Azure AD authentication (uses kubelogin for K8s 1.24+)
 az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing --use-azuread
+
+# Configure kubeconfig for workload identity
+echo -e "${BLUE}Converting kubeconfig to use workload identity authentication...${NC}"
+kubelogin convert-kubeconfig -l workloadidentity
+echo -e "${GREEN}✓ Using workload identity (AZURE_CLIENT_ID: $AZURE_CLIENT_ID)${NC}"
 
 # Test connectivity
 kubectl cluster-info --request-timeout=10s > /dev/null

@@ -1,0 +1,290 @@
+# Workload Identity-Enabled Kubernetes Job for Hub-to-Spoke Deployments
+# This job uses Azure Workload Identity for secure, credential-less authentication
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hub-to-spoke-workload-identity-deployment
+  namespace: hub-operations
+  labels:
+    app: hub-to-spoke-deployer
+    job-type: cross-cluster-deployment
+    auth-method: workload-identity
+spec:
+  ttlSecondsAfterFinished: 3600  # Keep job for 1 hour after completion
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"  # Enable workload identity injection
+        app: hub-to-spoke-deployer
+    spec:
+      serviceAccountName: hub-to-spoke-sa  # Service account with workload identity
+      restartPolicy: OnFailure
+      containers:
+      - name: deployment-container
+        image: mcr.microsoft.com/azure-cli:latest
+        
+        # Environment variables for deployment configuration
+        env:
+        - name: SPOKE_CLUSTER_NAME
+          value: "aks-spoke-prod-001"
+        - name: SPOKE_RG
+          value: "rg-aks-spoke-prod-001"
+        - name: DEPLOYMENT_NAMESPACE
+          value: "demo-app"
+        - name: APP_NAME
+          value: "nginx-demo"
+        - name: APP_REPLICAS
+          value: "3"
+        # Workload identity environment variables are automatically injected:
+        # - AZURE_CLIENT_ID
+        # - AZURE_TENANT_ID  
+        # - AZURE_FEDERATED_TOKEN_FILE
+        # - AZURE_AUTHORITY_HOST
+        
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        
+        command: ["/bin/bash"]
+        args:
+          - -c
+          - |
+            set -euo pipefail
+            
+            echo "🚀 Starting Hub-to-Spoke Deployment with Workload Identity"
+            echo "============================================================"
+            echo "Target Spoke Cluster: $SPOKE_CLUSTER_NAME"
+            echo "Resource Group: $SPOKE_RG"
+            echo "Deployment Namespace: $DEPLOYMENT_NAMESPACE"
+            echo ""
+            
+            # Function for status messages
+            log_info() { echo -e "\033[0;34m[INFO]\033[0m $1"; }
+            log_success() { echo -e "\033[0;32m[SUCCESS]\033[0m $1"; }
+            log_warning() { echo -e "\033[1;33m[WARNING]\033[0m $1"; }
+            log_error() { echo -e "\033[0;31m[ERROR]\033[0m $1"; }
+            
+            # Install kubectl and kubelogin
+            log_info "Installing kubectl..."
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl
+            mv kubectl /usr/local/bin/
+            
+            log_info "Installing kubelogin..."
+            curl -LO https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.zip
+            unzip kubelogin-linux-amd64.zip
+            mv bin/linux_amd64/kubelogin /usr/local/bin/
+            
+            # Verify workload identity environment
+            log_info "Verifying workload identity configuration..."
+            if [[ -z "${AZURE_CLIENT_ID:-}" ]]; then
+                log_error "AZURE_CLIENT_ID not found. Workload identity may not be configured correctly."
+                exit 1
+            fi
+            if [[ -z "${AZURE_FEDERATED_TOKEN_FILE:-}" ]]; then
+                log_error "AZURE_FEDERATED_TOKEN_FILE not found. Workload identity may not be configured correctly."
+                exit 1
+            fi
+            
+            echo "  Client ID: $AZURE_CLIENT_ID"
+            echo "  Tenant ID: $AZURE_TENANT_ID"
+            echo "  Token File: $AZURE_FEDERATED_TOKEN_FILE"
+            echo "  Authority: $AZURE_AUTHORITY_HOST"
+            
+            # Verify Azure authentication
+            log_info "Verifying Azure authentication..."
+            if az account show > /dev/null 2>&1; then
+                log_success "Successfully authenticated to Azure using workload identity"
+                SUBSCRIPTION_NAME=$(az account show --query name -o tsv)
+                echo "  Subscription: $SUBSCRIPTION_NAME"
+            else
+                log_error "Failed to authenticate to Azure with workload identity"
+                exit 1
+            fi
+            
+            # Get spoke cluster credentials
+            log_info "Configuring kubectl for spoke cluster..."
+            az aks get-credentials \
+                --resource-group "$SPOKE_RG" \
+                --name "$SPOKE_CLUSTER_NAME" \
+                --use-azuread \
+                --overwrite-existing
+            
+            # Convert kubeconfig to use workload identity
+            log_info "Converting kubeconfig to use workload identity..."
+            kubelogin convert-kubeconfig -l workloadidentity
+            
+            # Test cluster connectivity
+            log_info "Testing spoke cluster connectivity..."
+            if kubectl cluster-info > /dev/null 2>&1; then
+                log_success "Successfully connected to spoke cluster"
+                CLUSTER_VERSION=$(kubectl version --short --client=false 2>/dev/null | grep "Server Version" | cut -d' ' -f3)
+                echo "  Cluster Version: $CLUSTER_VERSION"
+            else
+                log_error "Failed to connect to spoke cluster"
+                exit 1
+            fi
+            
+            # Create namespace if it doesn't exist
+            log_info "Creating namespace '$DEPLOYMENT_NAMESPACE'..."
+            kubectl create namespace "$DEPLOYMENT_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+            kubectl label namespace "$DEPLOYMENT_NAMESPACE" \
+                managed-by=hub-cluster-workload-identity \
+                deployed-at="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --overwrite
+            
+            # Create deployment manifest
+            log_info "Creating deployment manifest..."
+            cat > /tmp/deployment.yaml << 'YAML_EOF'
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: ${APP_NAME}
+              namespace: ${DEPLOYMENT_NAMESPACE}
+              labels:
+                app: ${APP_NAME}
+                deployed-by: hub-cluster-workload-identity
+                deployment-method: kubernetes-job
+            spec:
+              replicas: ${APP_REPLICAS}
+              selector:
+                matchLabels:
+                  app: ${APP_NAME}
+              template:
+                metadata:
+                  labels:
+                    app: ${APP_NAME}
+                spec:
+                  containers:
+                  - name: nginx
+                    image: nginx:1.25
+                    ports:
+                    - containerPort: 80
+                      protocol: TCP
+                    env:
+                    - name: DEPLOYMENT_SOURCE
+                      value: "hub-cluster-workload-identity"
+                    - name: DEPLOYMENT_TIME
+                      value: "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                    - name: SPOKE_CLUSTER
+                      value: "${SPOKE_CLUSTER_NAME}"
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: 200m
+                        memory: 256Mi
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 15
+                      periodSeconds: 30
+            YAML_EOF
+            
+            # Substitute environment variables in the manifest
+            envsubst < /tmp/deployment.yaml > /tmp/deployment-final.yaml
+            
+            # Create service manifest
+            log_info "Creating service manifest..."
+            cat > /tmp/service.yaml << 'YAML_EOF'
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: ${APP_NAME}-service
+              namespace: ${DEPLOYMENT_NAMESPACE}
+              labels:
+                app: ${APP_NAME}
+                deployed-by: hub-cluster-workload-identity
+              annotations:
+                service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /
+            spec:
+              type: LoadBalancer
+              ports:
+              - name: http
+                port: 80
+                targetPort: 80
+                protocol: TCP
+              selector:
+                app: ${APP_NAME}
+            YAML_EOF
+            
+            # Substitute environment variables in the service manifest
+            envsubst < /tmp/service.yaml > /tmp/service-final.yaml
+            
+            # Apply manifests
+            log_info "Deploying application to spoke cluster..."
+            kubectl apply -f /tmp/deployment-final.yaml
+            kubectl apply -f /tmp/service-final.yaml
+            
+            # Wait for deployment to be ready
+            log_info "Waiting for deployment to be ready..."
+            if kubectl wait --for=condition=available --timeout=300s "deployment/$APP_NAME" -n "$DEPLOYMENT_NAMESPACE"; then
+                log_success "Deployment is ready"
+            else
+                log_error "Deployment failed to become ready within timeout"
+                kubectl describe deployment "$APP_NAME" -n "$DEPLOYMENT_NAMESPACE"
+                exit 1
+            fi
+            
+            # Wait for external IP assignment
+            log_info "Waiting for external IP assignment..."
+            EXTERNAL_IP=""
+            for i in {1..30}; do
+                EXTERNAL_IP=$(kubectl get service "${APP_NAME}-service" -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+                if [[ -n "$EXTERNAL_IP" && "$EXTERNAL_IP" != "null" ]]; then
+                    break
+                fi
+                echo "  Attempt $i/30: Waiting for external IP..."
+                sleep 10
+            done
+            
+            if [[ -n "$EXTERNAL_IP" && "$EXTERNAL_IP" != "null" ]]; then
+                log_success "External IP assigned: $EXTERNAL_IP"
+            else
+                log_warning "External IP not yet assigned (may take additional time)"
+            fi
+            
+            # Display deployment summary
+            echo ""
+            log_success "Deployment Summary"
+            echo "==================="
+            echo "Namespace: $DEPLOYMENT_NAMESPACE"
+            echo "Deployment: $APP_NAME ($APP_REPLICAS replicas)"
+            echo "Service: ${APP_NAME}-service (LoadBalancer)"
+            if [[ -n "$EXTERNAL_IP" && "$EXTERNAL_IP" != "null" ]]; then
+                echo "External URL: http://$EXTERNAL_IP"
+            fi
+            echo "Authentication: Azure Workload Identity"
+            echo "Client ID: $AZURE_CLIENT_ID"
+            echo ""
+            
+            # Show all resources
+            log_info "Deployed resources:"
+            kubectl get all -n "$DEPLOYMENT_NAMESPACE" -l app="$APP_NAME"
+            
+            echo ""
+            log_success "Hub-to-spoke deployment completed successfully!"
+            
+            # Provide verification commands
+            echo ""
+            log_info "Verification Commands:"
+            echo "  kubectl get pods -n $DEPLOYMENT_NAMESPACE"
+            echo "  kubectl logs deployment/$APP_NAME -n $DEPLOYMENT_NAMESPACE"
+            echo "  kubectl get service ${APP_NAME}-service -n $DEPLOYMENT_NAMESPACE"
+            if [[ -n "$EXTERNAL_IP" && "$EXTERNAL_IP" != "null" ]]; then
+                echo "  curl http://$EXTERNAL_IP"
+            fi
