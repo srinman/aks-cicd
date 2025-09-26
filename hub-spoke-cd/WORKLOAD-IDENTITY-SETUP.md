@@ -28,7 +28,7 @@ Azure Workload Identity uses OpenID Connect (OIDC) federation between Azure AD a
 ```bash
 # Set variables
 HUB_RG="myorg-hub-rg"
-HUB_CLUSTER_NAME="aks-hub-prod-001"
+HUB_CLUSTER_NAME="myorg-hub-aks"
 
 # Enable workload identity and OIDC issuer
 az aks update \

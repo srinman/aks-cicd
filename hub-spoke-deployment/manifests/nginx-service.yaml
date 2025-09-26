@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-demo-service
+  namespace: demo-app
+  labels:
+    app: nginx-demo
+    managed-by: hub-cluster
+  annotations:
+    service.beta.kubernetes.io/azure-load-balancer-health-probe-request-path: /
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: nginx-demo

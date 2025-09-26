@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app
+  labels:
+    managed-by: hub-cluster
+    deployment-method: direct-kubectl
+    environment: spoke-demo

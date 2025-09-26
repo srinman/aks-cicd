@@ -1,0 +1,103 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hub-to-spoke-deployment
+  namespace: hub-operations
+  labels:
+    job-type: cross-cluster-deployment
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        azure.workload.identity/use: "true"
+        job-type: cross-cluster-deployment
+    spec:
+      serviceAccountName: hub-to-spoke-sa
+      restartPolicy: OnFailure
+      containers:
+      - name: deployment-container
+        image: mcr.microsoft.com/azure-cli:latest
+        env:
+        - name: SPOKE_CLUSTER_NAME
+          value: "myorg-dev-aks"
+        - name: SPOKE_RG
+          value: "myorg-dev-rg"
+        command: ["/bin/bash"]
+        args:
+          - -c
+          - |
+            set -e
+            echo "🚀 Starting hub-to-spoke deployment"
+            echo "Target: $SPOKE_CLUSTER_NAME in $SPOKE_RG"
+            
+            # Install kubectl
+            echo "Installing kubectl..."
+            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl && mv kubectl /usr/local/bin/
+            echo "✅ kubectl installed"
+            
+            # Try to install kubelogin - use fallback if needed
+            echo "Installing kubelogin..."
+            if curl -L https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.tar.gz | tar xz; then
+                mv bin/linux_amd64/kubelogin /usr/local/bin/ && chmod +x /usr/local/bin/kubelogin
+                echo "✅ kubelogin installed via tar"
+            else
+                echo "⚠️  kubelogin installation failed, trying alternative..."
+                # Download zip and try python extraction
+                curl -L "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.zip" -o kubelogin.zip
+                python3 -c "import zipfile; zipfile.ZipFile('kubelogin.zip').extractall()"
+                mv bin/linux_amd64/kubelogin /usr/local/bin/ && chmod +x /usr/local/bin/kubelogin
+                echo "✅ kubelogin installed via python"
+            fi
+            
+            # Verify installations
+            kubectl version --client || kubectl version
+            kubelogin --version
+            
+            # Check workload identity
+            echo "Environment check:"
+            echo "AZURE_CLIENT_ID: $AZURE_CLIENT_ID"
+            echo "AZURE_TENANT_ID: $AZURE_TENANT_ID"
+            echo "AZURE_FEDERATED_TOKEN_FILE: $AZURE_FEDERATED_TOKEN_FILE"
+            
+            # Authenticate
+            echo "Authenticating with Azure..."
+            if [ -f "$AZURE_FEDERATED_TOKEN_FILE" ]; then
+                az login --service-principal --username "$AZURE_CLIENT_ID" --tenant "$AZURE_TENANT_ID" --federated-token "$(cat $AZURE_FEDERATED_TOKEN_FILE)"
+                echo "✅ Authenticated"
+            else
+                echo "❌ Token file not found: $AZURE_FEDERATED_TOKEN_FILE"
+                exit 1
+            fi
+            
+            # Get credentials - use correct command for this Azure CLI version
+            echo "Getting AKS credentials..."
+            az aks get-credentials --resource-group $SPOKE_RG --name $SPOKE_CLUSTER_NAME --overwrite-existing
+            
+            # Configure for workload identity
+            echo "Converting kubeconfig for workload identity..."
+            kubelogin convert-kubeconfig -l workloadidentity
+            
+            # Test connection
+            echo "Testing cluster connectivity..."
+            kubectl cluster-info --request-timeout=30s
+            
+            # Deploy resources
+            echo "📦 Creating namespace..."
+            kubectl create namespace demo-app --dry-run=client -o yaml | kubectl apply -f -
+            
+            echo "🚀 Deploying nginx..."
+            kubectl create deployment nginx-demo --image=nginx:1.25 --replicas=3 -n demo-app
+            kubectl set resources deployment nginx-demo --requests=cpu=100m,memory=128Mi --limits=cpu=200m,memory=256Mi -n demo-app
+            
+            echo "🌐 Creating service..."
+            kubectl expose deployment nginx-demo --port=80 --type=LoadBalancer -n demo-app --name=nginx-demo-service
+            
+            # Wait for deployment
+            echo "⏳ Waiting for deployment..."
+            kubectl wait --for=condition=available --timeout=300s deployment/nginx-demo -n demo-app
+            
+            echo "📋 Final status:"
+            kubectl get all -n demo-app
+            echo "✅ Deployment completed!"

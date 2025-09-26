@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: hub-to-spoke-sa
+  namespace: hub-operations
+  annotations:
+    azure.workload.identity/client-id: "604074ac-5cd5-4be3-94a7-3a95bfaa0d60"
+  labels:
+    azure.workload.identity/use: "true"

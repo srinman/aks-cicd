@@ -571,18 +571,18 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: hub-to-spoke-deployment
-  namespace: hub-operations  # Use the workload identity namespace
+  namespace: hub-operations
   labels:
     job-type: cross-cluster-deployment
 spec:
-  ttlSecondsAfterFinished: 3600  # Keep job for 1 hour after completion
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
         azure.workload.identity/use: "true"
         job-type: cross-cluster-deployment
     spec:
-      serviceAccountName: hub-to-spoke-sa  # Use workload identity service account
+      serviceAccountName: hub-to-spoke-sa
       restartPolicy: OnFailure
       containers:
       - name: deployment-container
@@ -592,167 +592,84 @@ spec:
           value: "$SPOKE_CLUSTER_NAME"
         - name: SPOKE_RG
           value: "$SPOKE_RG"
-        # Workload identity environment variables are automatically injected:
-        # - AZURE_CLIENT_ID
-        # - AZURE_TENANT_ID  
-        # - AZURE_FEDERATED_TOKEN_FILE
-        # - AZURE_AUTHORITY_HOST
         command: ["/bin/bash"]
         args:
           - -c
           - |
             set -e
-            echo "🚀 Starting hub-to-spoke deployment using managed identity"
-            echo "Hub Identity Client ID: \$HUB_IDENTITY_CLIENT_ID"
+            echo "🚀 Starting hub-to-spoke deployment"
             echo "Target: \$SPOKE_CLUSTER_NAME in \$SPOKE_RG"
-            
-            # Install required packages (Alpine Linux packages)
-            echo "Installing required packages..."
-            apk add --no-cache curl tar gzip
             
             # Install kubectl
             echo "Installing kubectl..."
             curl -LO "https://dl.k8s.io/release/\$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-            chmod +x kubectl
-            mv kubectl /usr/local/bin/
-            echo "✅ kubectl installed successfully"
+            chmod +x kubectl && mv kubectl /usr/local/bin/
+            echo "✅ kubectl installed"
             
-            # Install kubelogin - direct binary download (more reliable)
+            # Try to install kubelogin - use fallback if needed
             echo "Installing kubelogin..."
-            KUBELOGIN_VERSION=\$(curl -s https://api.github.com/repos/Azure/kubelogin/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-            curl -L "https://github.com/Azure/kubelogin/releases/download/\${KUBELOGIN_VERSION}/kubelogin-linux-amd64.zip" -o kubelogin.zip
-            
-            # Check if unzip is available, if not install it
-            if ! command -v unzip &> /dev/null; then
-                echo "Installing unzip..."
-                apk add --no-cache unzip
+            if curl -L https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.tar.gz | tar xz; then
+                mv bin/linux_amd64/kubelogin /usr/local/bin/ && chmod +x /usr/local/bin/kubelogin
+                echo "✅ kubelogin installed via tar"
+            else
+                echo "⚠️  kubelogin installation failed, trying alternative..."
+                # Download zip and try python extraction
+                curl -L "https://github.com/Azure/kubelogin/releases/latest/download/kubelogin-linux-amd64.zip" -o kubelogin.zip
+                python3 -c "import zipfile; zipfile.ZipFile('kubelogin.zip').extractall()"
+                mv bin/linux_amd64/kubelogin /usr/local/bin/ && chmod +x /usr/local/bin/kubelogin
+                echo "✅ kubelogin installed via python"
             fi
             
-            unzip kubelogin.zip
-            mv bin/linux_amd64/kubelogin /usr/local/bin/
-            chmod +x /usr/local/bin/kubelogin
-            rm -f kubelogin.zip
-            echo "✅ kubelogin installed successfully"
+            # Verify installations
+            kubectl version --client || kubectl version
+            kubelogin --version
             
-            # Verify workload identity environment variables
-            echo "Using workload identity authentication"
+            # Check workload identity
+            echo "Environment check:"
             echo "AZURE_CLIENT_ID: \$AZURE_CLIENT_ID"
             echo "AZURE_TENANT_ID: \$AZURE_TENANT_ID"
             echo "AZURE_FEDERATED_TOKEN_FILE: \$AZURE_FEDERATED_TOKEN_FILE"
             
-            # Authenticate using workload identity token
-            echo "Authenticating with Azure using workload identity..."
+            # Authenticate
+            echo "Authenticating with Azure..."
             if [ -f "\$AZURE_FEDERATED_TOKEN_FILE" ]; then
-                az login --service-principal \\
-                    --username "\$AZURE_CLIENT_ID" \\
-                    --tenant "\$AZURE_TENANT_ID" \\
-                    --federated-token "\$(cat \$AZURE_FEDERATED_TOKEN_FILE)"
-                echo "✅ Successfully authenticated using workload identity"
+                az login --service-principal --username "\$AZURE_CLIENT_ID" --tenant "\$AZURE_TENANT_ID" --federated-token "\$(cat \$AZURE_FEDERATED_TOKEN_FILE)"
+                echo "✅ Authenticated"
             else
-                echo "❌ Federated token file not found: \$AZURE_FEDERATED_TOKEN_FILE"
+                echo "❌ Token file not found: \$AZURE_FEDERATED_TOKEN_FILE"
                 exit 1
             fi
             
-            # Verify authentication
-            az account show
+            # Get credentials - use correct command for this Azure CLI version
+            echo "Getting AKS credentials..."
+            az aks get-credentials --resource-group \$SPOKE_RG --name \$SPOKE_CLUSTER_NAME --overwrite-existing
             
-            # Get spoke cluster credentials using workload identity
-            az aks get-credentials --resource-group \$SPOKE_RG --name \$SPOKE_CLUSTER_NAME --use-azuread
-            
-            # Configure kubeconfig for workload identity
+            # Configure for workload identity
+            echo "Converting kubeconfig for workload identity..."
             kubelogin convert-kubeconfig -l workloadidentity
             
-            # Create deployment manifests
-            mkdir -p /tmp/manifests
+            # Test connection
+            echo "Testing cluster connectivity..."
+            kubectl cluster-info --request-timeout=30s
             
-            # Create namespace
-            cat > /tmp/manifests/namespace.yaml << 'MANIFEST_EOF'
-            apiVersion: v1
-            kind: Namespace
-            metadata:
-              name: demo-app
-              labels:
-                managed-by: hub-cluster-job
-                deployment-timestamp: "$(date -u +%Y%m%d-%H%M%S)"
-            MANIFEST_EOF
-            
-            # Create deployment
-            cat > /tmp/manifests/deployment.yaml << 'MANIFEST_EOF'
-            apiVersion: apps/v1
-            kind: Deployment
-            metadata:
-              name: nginx-demo
-              namespace: demo-app
-              labels:
-                app: nginx-demo
-                deployed-by: hub-cluster-managed-identity
-            spec:
-              replicas: 3
-              selector:
-                matchLabels:
-                  app: nginx-demo
-              template:
-                metadata:
-                  labels:
-                    app: nginx-demo
-                spec:
-                  containers:
-                  - name: nginx
-                    image: nginx:1.25
-                    ports:
-                    - containerPort: 80
-                    env:
-                    - name: DEPLOYMENT_SOURCE
-                      value: "hub-cluster-job"
-                    - name: DEPLOYMENT_TIME
-                      value: "$(date -u)"
-                    resources:
-                      requests:
-                        cpu: 100m
-                        memory: 128Mi
-                      limits:
-                        cpu: 200m
-                        memory: 256Mi
-            MANIFEST_EOF
-            
-            # Create service
-            cat > /tmp/manifests/service.yaml << 'MANIFEST_EOF'
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: nginx-demo-service
-              namespace: demo-app
-              labels:
-                app: nginx-demo
-            spec:
-              type: LoadBalancer
-              ports:
-              - port: 80
-                targetPort: 80
-                name: http
-              selector:
-                app: nginx-demo
-            MANIFEST_EOF
-            
-            # Apply manifests
+            # Deploy resources
             echo "📦 Creating namespace..."
-            kubectl apply -f /tmp/manifests/namespace.yaml
+            kubectl create namespace demo-app --dry-run=client -o yaml | kubectl apply -f -
             
-            echo "🚀 Deploying nginx application..."
-            kubectl apply -f /tmp/manifests/deployment.yaml
+            echo "🚀 Deploying nginx..."
+            kubectl create deployment nginx-demo --image=nginx:1.25 --replicas=3 -n demo-app
+            kubectl set resources deployment nginx-demo --requests=cpu=100m,memory=128Mi --limits=cpu=200m,memory=256Mi -n demo-app
             
-            echo "🌐 Creating load balancer service..."
-            kubectl apply -f /tmp/manifests/service.yaml
+            echo "🌐 Creating service..."
+            kubectl expose deployment nginx-demo --port=80 --type=LoadBalancer -n demo-app --name=nginx-demo-service
             
             # Wait for deployment
-            echo "⏳ Waiting for deployment to be ready..."
+            echo "⏳ Waiting for deployment..."
             kubectl wait --for=condition=available --timeout=300s deployment/nginx-demo -n demo-app
             
-            echo "📋 Deployment status:"
+            echo "📋 Final status:"
             kubectl get all -n demo-app
-            
-            echo "✅ Hub-to-spoke deployment completed successfully!"
-            echo "🔗 Resources deployed to spoke cluster: \$SPOKE_CLUSTER_NAME"
+            echo "✅ Deployment completed!"
 EOF
 
 # Create the hub-operations namespace if it doesn't exist
